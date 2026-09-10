@@ -29,11 +29,15 @@ function buildClickUrl(order) {
 
 // Payme checkout havolasi — parametrlar base64 qilinib URL yo'liga qo'shiladi.
 // https://developer.help.paycom.uz — "Checkout" hujjati.
+// PAYME_TEST_MODE=true bo'lsa — sinov (sandbox) domeniga yo'naltiradi, bu
+// biznes hali Payme tomonidan tasdiqlanmagan bo'lsa ham butun oqimni
+// (checkout -> webhook -> buyurtma holati) sinab ko'rish imkonini beradi.
 function buildPaymeUrl(order) {
   const amountTiyin = order.totalPrice * 100; // Payme summani tiyinda kutadi
   const raw = `m=${process.env.PAYME_MERCHANT_ID};ac.order_id=${order.id};a=${amountTiyin}`;
   const encoded = Buffer.from(raw).toString("base64");
-  return `https://checkout.paycom.uz/${encoded}`;
+  const host = process.env.PAYME_TEST_MODE === "true" ? "test.paycom.uz" : "checkout.paycom.uz";
+  return `https://${host}/${encoded}`;
 }
 
 function buildPaymentUrl(method, order) {

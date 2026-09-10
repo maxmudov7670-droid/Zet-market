@@ -139,7 +139,10 @@ const PAYME_EXPIRE_MS = 12 * 60 * 60 * 1000; // 12 soat
 
 function requirePaymeAuth(req, res, next) {
   const auth = req.header("authorization") || "";
-  const expected = "Basic " + Buffer.from(`Paycom:${process.env.PAYME_KEY}`).toString("base64");
+  // PAYME_TEST_MODE=true bo'lsa, Payme sandbox serveri PAYME_TEST_KEY bilan
+  // avtorizatsiya qiladi (production kalitidan farqli) — shu holatda shuni kutamiz.
+  const key = process.env.PAYME_TEST_MODE === "true" ? process.env.PAYME_TEST_KEY : process.env.PAYME_KEY;
+  const expected = "Basic " + Buffer.from(`Paycom:${key}`).toString("base64");
   if (auth !== expected) {
     return res.json({
       error: { code: -32504, message: "Insufficient privilege to perform this method." },
