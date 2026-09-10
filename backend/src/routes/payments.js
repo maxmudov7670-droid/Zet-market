@@ -191,12 +191,17 @@ function requirePaymeAuth(req, res, next) {
 }
 
 async function findOrderForPayme(orderId, amountTiyin) {
-  // Payme sandbox "hisob topilmadi" holatini sinashda order_id sifatida
-  // "#13" kabi raqam bo'lmagan qiymat yuborishi mumkin — Number(...) bunda
-  // NaN beradi va Prisma'ga shu holda so'rov yuborilsa ichki xatoga
-  // uchraymiz. Shuning uchun raqamga aylanmasa, darhol "hisob topilmadi"
-  // deb javob qaytaramiz (Prisma'ga umuman murojaat qilmasdan).
-  const numericId = Number(orderId);
+  // Payme'ning sandbox (Песочница) test vositasi account.order_id qiymatini
+  // ODATDA "#" belgisi bilan yuboradi (masalan "#255") — bu haqiqiy mavjud
+  // buyurtmalar uchun ham shunday, faqat "hisob topilmadi" testida emas.
+  // Shu "#" ni Number()'ga uzatishdan oldin kesib olmasak, MAVJUD
+  // buyurtmalar ham "topilmadi" deb noto'g'ri javob qaytariladi. Shuning
+  // uchun avval "#" va bo'sh joylarni tozalaymiz, keyingina raqamga
+  // aylantiramiz; agar baribir raqam bo'lmasa (masalan sinov uchun
+  // yuborilgan "abc" kabi qiymat) — "hisob topilmadi" deb javob beramiz
+  // (Prisma'ga umuman murojaat qilmasdan).
+  const cleanedId = String(orderId ?? "").trim().replace(/^#/, "");
+  const numericId = Number(cleanedId);
   if (!Number.isInteger(numericId) || numericId <= 0) {
     throw paymeError(PAYME_ERROR.ACCOUNT_NOT_FOUND);
   }
