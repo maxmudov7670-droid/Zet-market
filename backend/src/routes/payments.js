@@ -135,6 +135,44 @@ const PAYME_ERROR = {
   METHOD_NOT_FOUND: -32601,
 };
 
+// Rasmiy hujjat (developer.help.paycom.uz/metody-merchant-api/oshibki-errors)
+// talabi: -31050..-31099 oralig'idagi xatolarda "message" ko'p tilli
+// obyekt bo'lishi VA "data" maydonida xato subfield nomi ("account" ichidagi,
+// bizda — "order_id") ko'rsatilishi SHART, aks holda Payme javobni
+// "спецификацияga mos emas" deb rad etadi.
+const PAYME_MESSAGES = {
+  [PAYME_ERROR.INVALID_AMOUNT]: { ru: "Неверная сумма", uz: "Noto'g'ri summa", en: "Invalid amount" },
+  [PAYME_ERROR.TRANSACTION_NOT_FOUND]: {
+    ru: "Транзакция не найдена",
+    uz: "Tranzaksiya topilmadi",
+    en: "Transaction not found",
+  },
+  [PAYME_ERROR.CANNOT_CANCEL]: {
+    ru: "Невозможно отменить транзакцию",
+    uz: "Tranzaksiyani bekor qilib bo'lmaydi",
+    en: "Cannot cancel transaction",
+  },
+  [PAYME_ERROR.CANNOT_PERFORM]: {
+    ru: "Невозможно выполнить операцию",
+    uz: "Amalni bajarib bo'lmaydi",
+    en: "Cannot perform operation",
+  },
+  [PAYME_ERROR.ACCOUNT_NOT_FOUND]: { ru: "Заказ не найден", uz: "Buyurtma topilmadi", en: "Order not found" },
+  [PAYME_ERROR.METHOD_NOT_FOUND]: { ru: "Метод не найден", uz: "Metod topilmadi", en: "Method not found" },
+};
+
+// `data` faqat ACCOUNT_NOT_FOUND (-31050) uchun beriladi — hujjatga ko'ra
+// bu xato subfield nomini ("order_id") ko'rsatishi shart, boshqalarida shart emas.
+function paymeError(code) {
+  const e = new Error(PAYME_MESSAGES[code]?.en || "Payme error");
+  e.code = code;
+  e.paymeMessage = PAYME_MESSAGES[code] || { ru: "Xatolik", uz: "Xatolik", en: "Error" };
+  if (code === PAYME_ERROR.ACCOUNT_NOT_FOUND) {
+    e.data = "order_id";
+  }
+  return e;
+}
+
 const PAYME_EXPIRE_MS = 12 * 60 * 60 * 1000; // 12 soat
 
 function requirePaymeAuth(req, res, next) {
@@ -153,16 +191,22 @@ function requirePaymeAuth(req, res, next) {
 }
 
 async function findOrderForPayme(orderId, amountTiyin) {
-  const order = await prisma.order.findUnique({ where: { id: Number(orderId) } });
+  // Payme sandbox "hisob topilmadi" holatini sinashda order_id sifatida
+  // "#13" kabi raqam bo'lmagan qiymat yuborishi mumkin — Number(...) bunda
+  // NaN beradi va Prisma'ga shu holda so'rov yuborilsa ichki xatoga
+  // uchraymiz. Shuning uchun raqamga aylanmasa, darhol "hisob topilmadi"
+  // deb javob qaytaramiz (Prisma'ga umuman murojaat qilmasdan).
+  const numericId = Number(orderId);
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    throw paymeError(PAYME_ERROR.ACCOUNT_NOT_FOUND);
+  }
+
+  const order = await prisma.order.findUnique({ where: { id: numericId } });
   if (!order) {
-    const e = new Error("not found");
-    e.code = PAYME_ERROR.ACCOUNT_NOT_FOUND;
-    throw e;
+    throw paymeError(PAYME_ERROR.ACCOUNT_NOT_FOUND);
   }
   if (order.totalPrice * 100 !== Number(amountTiyin)) {
-    const e = new Error("wrong amount");
-    e.code = PAYME_ERROR.INVALID_AMOUNT;
-    throw e;
+    throw paymeError(PAYME_ERROR.INVALID_AMOUNT);
   }
   return order;
 }
@@ -173,8 +217,10 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
   function ok(result) {
     res.json({ result, id });
   }
-  function fail(code, message) {
-    res.json({ error: { code, message }, id });
+  function fail(code, data) {
+    const error = { code, message: PAYME_MESSAGES[code] || { ru: "Xatolik", uz: "Xatolik", en: "Error" } };
+    if (data !== undefined) error.data = data;
+    res.json({ error, id });
   }
 
   try {
@@ -189,7 +235,7 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
       const existing = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
       if (existing) {
         if (existing.state !== 1) {
-          return fail(PAYME_ERROR.CANNOT_PERFORM, "Transaction state is invalid");
+          return fail(PAYME_ERROR.CANNOT_PERFORM);
         }
         return ok({ create_time: Number(existing.createTime), transaction: existing.id, state: existing.state });
       }
@@ -199,7 +245,7 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
         where: { orderId: order.id, state: { in: [1, 2] } },
       });
       if (activeForOrder) {
-        return fail(PAYME_ERROR.ACCOUNT_NOT_FOUND, "Order already has an active transaction");
+        return fail(PAYME_ERROR.ACCOUNT_NOT_FOUND, "order_id");
       }
 
       const tx = await prisma.paymeTransaction.create({
@@ -217,20 +263,20 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
 
     if (method === "PerformTransaction") {
       const tx = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
-      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND, "Transaction not found");
+      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND);
 
       if (tx.state === 2) {
         return ok({ perform_time: Number(tx.performTime), transaction: tx.id, state: tx.state });
       }
       if (tx.state !== 1) {
-        return fail(PAYME_ERROR.CANNOT_PERFORM, "Transaction state is invalid");
+        return fail(PAYME_ERROR.CANNOT_PERFORM);
       }
       if (Date.now() - Number(tx.createTime) > PAYME_EXPIRE_MS) {
         await prisma.paymeTransaction.update({
           where: { id: tx.id },
           data: { state: -1, cancelTime: BigInt(Date.now()), reason: 4 },
         });
-        return fail(PAYME_ERROR.CANNOT_PERFORM, "Transaction expired");
+        return fail(PAYME_ERROR.CANNOT_PERFORM);
       }
 
       const performTime = Date.now();
@@ -252,7 +298,7 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
 
     if (method === "CancelTransaction") {
       const tx = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
-      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND, "Transaction not found");
+      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND);
 
       if (tx.state === -1 || tx.state === -2) {
         return ok({ cancel_time: Number(tx.cancelTime), transaction: tx.id, state: tx.state });
@@ -275,7 +321,7 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
 
     if (method === "CheckTransaction") {
       const tx = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
-      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND, "Transaction not found");
+      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND);
       return ok({
         create_time: Number(tx.createTime),
         perform_time: Number(tx.performTime),
@@ -305,13 +351,13 @@ router.post("/payme", requirePaymeAuth, async (req, res) => {
       });
     }
 
-    return fail(PAYME_ERROR.METHOD_NOT_FOUND, "Method not found");
+    return fail(PAYME_ERROR.METHOD_NOT_FOUND);
   } catch (err) {
     if (err.code) {
-      return fail(err.code, err.message);
+      return fail(err.code, err.data);
     }
     console.error("Payme webhook xatosi:", err);
-    return fail(-32400, "Internal error");
+    return fail(-32400);
   }
 });
 
