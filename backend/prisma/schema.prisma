@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderStatus {
+  PENDING     // kutilmoqda
+  PREPARING   // tayyorlanmoqda
+  DELIVERING  // yetkazilmoqda
+  DELIVERED   // yetkazildi
+  CANCELLED   // bekor qilindi
+}
+
+model User {
+  id         Int      @id @default(autoincrement())
+  telegramId String   @unique @map("telegram_id")
+  firstName  String?  @map("first_name")
+  lastName   String?  @map("last_name")
+  username   String?
+  phone      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  orders Order[]
+
+  @@map("users")
+}
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  imageUrl    String?  @map("image_url")
+  oldPrice    Int?     @map("old_price")
+  newPrice    Int      @map("new_price") // narx shu birlik uchun (masalan 1 kg yoki 1 dona narxi)
+  unit        String   @default("dona") // dona | kg | litr
+  category    String   @default("Oziq-ovqat")
+  isActive    Boolean  @default(true) @map("is_active")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("products")
+}
+
+model Order {
+  id         Int         @id @default(autoincrement())
+  user       User        @relation(fields: [userId], references: [id])
+  userId     Int         @map("user_id")
+  items      Json // [{ productId, name, price, unit, qty, imageUrl }]
+  totalPrice Int         @map("total_price")
+  location   String? // "lat,lng" (Telegram location) or manual address text
+  note       String?
+  status     OrderStatus @default(PENDING)
+
+  // To'lov
+  paymentMethod       String  @default("cash") @map("payment_method") // cash | click | payme
+  paymentStatus       String  @default("pending") @map("payment_status") // pending | paid | failed
+  paymentProviderData Json?   @map("payment_provider_data") // Click uchun click_trans_id kabi holat
+
+  // Kuryer va xodimlar (Telegram tugmalari orqali boshqarish uchun)
+  courierMessageId Int?    @map("courier_message_id") // kuryerlar guruhidagi xabar id (tasdiqlash uchun tahrirlanadi)
+  staffMessageId    Int?    @map("staff_message_id") // xodimlar guruhidagi "yangi buyurtma" xabari id
+  courierTelegramId String? @map("courier_telegram_id") // buyurtmani "band qilgan" kuryerning Telegram id'si
+  courierName       String? @map("courier_name") // shu kuryerning ismi (xabarlarda ko'rsatish uchun)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  paymeTransactions PaymeTransaction[]
+
+  @@map("orders")
+}
+
+// Bosh sahifadagi yuqori qismdagi doiraviy bezaklar ("Yangi", "Aksiya",
+// "TOP" kabi) — Admin Panel orqali tahrirlanadi, kod ichida qattiq
+// yozilmagan.
+model HomeStory {
+  id        Int      @id @default(autoincrement())
+  emoji     String
+  label     String
+  category  String? // bosilganda Katalogda shu kategoriya ochiladi; bo'sh bo'lsa — "Barchasi"
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("home_stories")
+}
+
+// Payme Merchant API talabiga ko'ra har bir tranzaksiya alohida yoziladi
+// (Payme o'zining transaction id'si bo'yicha holatni so'raydi/yangilaydi).
+model PaymeTransaction {
+  id          String   @id // Payme tomonidan beriladigan tranzaksiya id
+  order       Order    @relation(fields: [orderId], references: [id])
+  orderId     Int      @map("order_id")
+  amount      Int // tiyin (so'm * 100)
+  state       Int // 1=yaratildi, 2=amalga oshirildi, -1=bekor(to'lovsiz), -2=bekor(to'lovdan keyin)
+  reason      Int? // bekor qilish sababi kodi
+  createTime  BigInt   @default(0) @map("create_time")
+  performTime BigInt   @default(0) @map("perform_time")
+  cancelTime  BigInt   @default(0) @map("cancel_time")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("payme_transactions")
+}
